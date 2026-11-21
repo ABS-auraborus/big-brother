@@ -1,8 +1,0 @@
-//
-// Created by matve on 21.11.2026.
-//
-
-#ifndef BIG_BROTHER_BIGBROTHER_H
-#define BIG_BROTHER_BIGBROTHER_H
-
-#endif //BIG_BROTHER_BIGBROTHER_H
