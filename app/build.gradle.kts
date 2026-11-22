@@ -34,6 +34,12 @@ android {
     buildFeatures {
         compose = true
     }
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt") // проверьте реальный путь
+            version = "3.22.1"
+        }
+    }
 }
 
 dependencies {
