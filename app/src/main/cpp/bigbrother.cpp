@@ -268,7 +268,7 @@ namespace {
 } // namespace
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_example_bigbrother_data_jni_NativerameBridge_initModel(
+Java_com_example_bigbrother_data_jni_NativeFrameBridge_nativeInitModel(
         JNIEnv* env,
         jobject,
         jstring modelPath
@@ -296,7 +296,7 @@ Java_com_example_bigbrother_data_jni_NativerameBridge_initModel(
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_example_bigbrother_data_jni_NativerameBridge_nativeSubmitFrame(
+Java_com_example_bigbrother_data_jni_NativeFrameBridge_nativeSubmitFrame(
         JNIEnv* env,
         jobject,
         jobject plane0,
@@ -421,9 +421,15 @@ Java_com_example_bigbrother_data_jni_NativerameBridge_nativeSubmitFrame(
         int bestClass = -1;
 
         for (int c = 4; c < numChannels; ++c) {
-            const float score = rawOutput[static_cast<size_t>(c) * stride + idx];
-            if (std::isfinite(score) && score > maxScore) {
-                maxScore = score;
+            const float logit = rawOutput[static_cast<size_t>(c) * stride + idx];
+            if (!std::isfinite(logit)) {
+                continue;
+            }
+            // Модель отдаёт class logits: переводим в вероятность (sigmoid),
+            // чтобы порог 0.5 и число в UI имели смысл вероятности.
+            const float probability = 1.0f / (1.0f + std::exp(-logit));
+            if (probability > maxScore) {
+                maxScore = probability;
                 bestClass = c - 4;
             }
         }
@@ -459,7 +465,7 @@ Java_com_example_bigbrother_data_jni_NativerameBridge_nativeSubmitFrame(
 }
 
 extern "C" JNIEXPORT jfloatArray JNICALL
-Java_com_example_bigbrother_data_jni_NativerameBridge_nativeCopyLatestDetections(
+Java_com_example_bigbrother_data_jni_NativeFrameBridge_nativeCopyLatestDetections(
         JNIEnv* env,
         jobject
 ) {
@@ -479,4 +485,13 @@ Java_com_example_bigbrother_data_jni_NativerameBridge_nativeCopyLatestDetections
         env->SetFloatArrayRegion(out, 0, count, snapshot.data());
     }
     return out;
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_example_bigbrother_data_jni_NativeFrameBridge_nativeGetLatestFrameTimestampNs(
+        JNIEnv*,
+        jobject
+) {
+    std::lock_guard<std::mutex> lock(g_boxesMutex);
+    return static_cast<jlong>(g_latestFrameTimestampNs);
 }
