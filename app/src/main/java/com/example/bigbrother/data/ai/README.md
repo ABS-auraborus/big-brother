@@ -1,25 +1,36 @@
-# ИИ-слой (директория зарезервирована)
+# Kotlin-слой, связанный с ИИ
 
-Сейчас в проекте **нет ни одного Kotlin-файла с ИИ-логикой**. Папка создана только
-как место под будущий Kotlin-код интеграции модели.
-
-## Что здесь появится позже
+Здесь лежит Kotlin-код, который подготавливает модель и её метаданные для
+нативного инференса. Сам инференс выполняется в C++ (`app/src/main/cpp/bigbrother.cpp`).
 
 ```text
 data/ai/
-├── DefectModelRunner.kt   // загрузка модели из assets/models и инференс
-├── DetectionResult.kt     // DTO результата модели
-└── ModelConfig.kt         // пороги, размер входа, версия модели
+├── AssetModelInstaller.kt   # копирует .onnx из assets в filesDir/models
+└── ModelLabels.kt           # имена 8 классов из метаданных best.onnx
 ```
 
-В будущем этот слой должен реализовывать интерфейс:
+## AssetModelInstaller
+
+`ONNX Runtime` в C++ открывает модель по пути в файловой системе. Android assets
+таким путём не являются, поэтому при первом кадре `NativeFrameBridge` вызывает
+`AssetModelInstaller.install("models/best.onnx", "best.onnx")`, который копирует
+файл в `context.filesDir/models/best.onnx`. При последующих запусках копирование
+пропускается, если размер файла совпадает с размером asset.
+
+## ModelLabels
+
+Список из 8 классов дефектов ЛКП в том порядке, в котором они закодированы в
+выходном тензоре модели (каналы 4..11). Используется в UI для подписей рамок и
+списка детекций. При замене модели с другим набором классов обновите этот файл.
+
+## Откуда берутся результаты
+
+Kotlin не запускает модель через ONNX Runtime Java API. Поток такой:
 
 ```text
-domain/repository/FrameProcessor.kt
+VideoFrame → NativeFrameBridge.process() → JNI nativeSubmitFrame(...)
+           ← float[] детекций ← nativeCopyLatestDetections()
+           → FrameAnalysisResult → CameraUiState → UI
 ```
 
-То есть камера по-прежнему будет отдавать `VideoFrame` через
-`ForwardFrameToNativeUseCase`, а конкретная реализация `FrameProcessor`
-решит, что делать с буферами: отправлять в C++ или сразу в модель.
-
-Сейчас единственная реализация — `data/jni/NativeFrameBridge.kt`.
+Домен и UI не зависят от ONNX: они работают с `Detection` и `FrameAnalysisResult`.

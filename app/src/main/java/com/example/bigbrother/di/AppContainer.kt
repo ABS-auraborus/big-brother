@@ -13,14 +13,11 @@ class AppContainer(
     private val lifecycleOwner: LifecycleOwner,
 ) {
 
-    private val frameProcessor = NativeFrameBridge()
+    private val frameProcessor = NativeFrameBridge(context = context.applicationContext)
     private val forwardFrame = ForwardFrameToNativeUseCase(frameProcessor)
 
     val cameraViewModelFactory: ViewModelFactory = ViewModelFactory {
-        CameraViewModel(
-            forwardFrame = forwardFrame,
-            nativeBridgeReady = frameProcessor.isReady,
-        )
+        CameraViewModel(forwardFrame = forwardFrame)
     }
 
     fun createCameraController(

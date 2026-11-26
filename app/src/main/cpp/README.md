@@ -1,40 +1,31 @@
-# C++-слой (пока пусто)
+# C++-слой (frame_bridge)
 
-Здесь будет лежать **весь C++-код обработки видеокадра**. Сейчас в проекте нет
-ни одного `.cpp`/`.h` файла и нет `CMakeLists.txt` — это сделано специально:
-на текущем этапе реализуется только Kotlin-часть камеры.
+Этот слой отвечает за приём YUV-кадров из Kotlin, препроцессинг, инференс
+ONNX-модели и возврат детекций дефектов ЛКП обратно в Kotlin.
 
-## Что появится в этой папке позже
+## Что здесь находится
 
 ```text
 app/src/main/cpp/
-├── CMakeLists.txt              // описание сборки libframe_bridge.so
-├── frame_bridge.cpp            // реализация JNI-функции
-├── frame_bridge.h              // объявления внутренних C++-функций
-└── (дополнительные .cpp/.h)   // алгоритмы работы с YUV-буферами
+├── CMakeLists.txt        # сборка libframe_bridge.so
+├── bigbrother.cpp        # JNI-мост, препроцессинг, ONNX Runtime, NMS
+└── libs/                 # vendored-зависимости (OpenCV SDK, ONNX Runtime Android)
 ```
 
-## Контракт с Kotlin
+Собирается библиотека: `libframe_bridge.so`.
 
-Kotlin-мост находится в:
+## Контракт JNI
 
-```text
-app/src/main/java/com/example/bigbrother/data/jni/NativeFrameBridge.kt
-```
+Kotlin-мост: `app/src/main/java/com/example/bigbrother/data/jni/NativeFrameBridge.kt`.
 
-Он загружает библиотеку:
+| JNI-функция | Назначение |
+|---|---|
+| `Java_..._NativeFrameBridge_nativeInitModel(String modelPath): boolean` | Создаёт `Ort::Session` из файла модели во внутреннем хранилище. |
+| `Java_..._NativeFrameBridge_nativeSubmitFrame(...13 args...): int` | Принимает 3 direct ByteBuffer плоскости YUV_420_888, выполняет препроцессинг + инференс + NMS. Возвращает число детекций или `< 0` при ошибке. |
+| `Java_..._NativeFrameBridge_nativeCopyLatestDetections(): float[]` | Копирует последнюю детекцию в Kotlin как плоский массив `[x1,y1,x2,y2,score,classId, ...]`. |
+| `Java_..._NativeFrameBridge_nativeGetLatestFrameTimestampNs(): long` | Timestamp кадра, к которому относится последний результат. |
 
-```kotlin
-System.loadLibrary("frame_bridge")
-```
-
-и ожидает JNI-функцию с именем:
-
-```text
-Java_com_example_bigbrother_data_jni_NativeFrameBridge_nativeSubmitFrame
-```
-
-Сигнатура Kotlin-объявления:
+Сигнатура `nativeSubmitFrame` (Kotlin):
 
 ```kotlin
 private external fun nativeSubmitFrame(
@@ -47,35 +38,48 @@ private external fun nativeSubmitFrame(
 ): Int
 ```
 
-C++ должен:
+## Правила работы с буферами
 
-1. Получить `jbyte*`/`uint8_t*` для каждого plane через `env->GetDirectBufferAddress(planeN)`.
-2. Работать с YUV_420_888 по `rowStride` и `pixelStride`.
-3. Учесть `rotationDegrees`.
-4. **Не хранить указатели после возврата из функции**: сразу после вызова
-   Kotlin закрывает `ImageProxy`, и direct-буферы становятся недействительными.
-   Если нужна асинхронная обработка — C++ обязан скопировать данные себе.
-5. Вернуть `Int` (например, 0 = успех; конкретные коды — по договорённости).
+1. Для каждого plane C++ получает указатель через `env->GetDirectBufferAddress(...)`.
+2. Перед чтением проверяется `GetDirectBufferCapacity` + `rowStride`/`pixelStride`.
+3. YUV_420_888 собирается в I420, затем конвертируется в RGB (`cv::cvtColor`).
+4. Учитывается `rotationDegrees` (0/90/180/270).
+5. **Указатели нельзя хранить после возврата из JNI**: Kotlin закрывает
+   `ImageProxy` сразу после синхронного вызова. Для async-обработки нужно копировать данные.
+6. Кадр приводится к letterbox 640x640, нормализуется в `[0,1]`, раскладывается
+   в NCHW-тензор и подаётся в ONNX Runtime (`images` → `output0`).
 
-## Как подключить сборку
+## Модель и постобработка
 
-Когда C++-код появится:
+- Модель: `app/src/main/assets/models/best.onnx` (Ultralytics YOLO26n, detect).
+- Вход: `[1, 3, 640, 640] float32`.
+- Выход: `[1, 12, 8400] float32` = `4 box + 8 class scores` на 8400 anchor.
+- Классы: Orange Peel, Paint sagging, Peel Off, bleeding, bubbling, cissing,
+  cratering, wrinkle (8 классов; метаданные модели).
+- Class-каналы — уже вероятности `[0,1]` (не logits): C++ сравнивает их напрямую
+  с порогом confidence `0.50`, затем применяет NMS IoU `0.45`.
+  Применять sigmoid повторно **нельзя**: фоновые `0.0` станут `0.5` и пройдут порог.
+- Координаты детекций переводятся из letterbox 640x640 обратно в координаты
+  **повёрнутого** RGB-кадра и clamp-ятся к границам изображения.
 
-1. Установить NDK и CMake в Android SDK.
-2. Создать `app/src/main/cpp/CMakeLists.txt`.
-3. Добавить в `app/build.gradle.kts`:
+## Коды ошибок `nativeSubmitFrame`
 
-```kotlin
-android {
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-        }
-    }
-}
-```
+| Код | Значение |
+|---:|---|
+| `>= 0` | число детекций после NMS |
+| `-1` | модель не инициализирована |
+| `-2` | некорректные размеры кадра |
+| `-3` | недостаточный capacity direct-буфера |
+| `-4` | `GetDirectBufferAddress` вернул null |
+| `-5` | ошибка сборки I420 |
+| `-6` | некорректный output tensor |
+| `-7` | некорректная shape выходного тензора |
+| `-8` | `Ort::Exception` во время Run |
+| `-9` | прочее std::exception |
 
-Альтернатива — положить готовые `.so` в `app/src/main/jniLibs/<abi>/`.
+## Сборка
 
-Пока библиотеки нет, `NativeFrameBridge.isReady == false`, приложение работает
-без падения и просто не отправляет кадры в C++.
+Сборка подключена в `app/build.gradle.kts` через `externalNativeBuild { cmake { ... } }`.
+Нужны Android NDK и CMake (проект проверялся с NDK 28.2.13676358 и CMake 3.22.1).
+Файл `gradle.properties` содержит `android.overridePathCheck=true` из-за не-ASCII
+символов в пути Windows.

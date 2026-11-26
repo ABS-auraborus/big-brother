@@ -26,9 +26,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.bigbrother.data.ai.ModelLabels
 import com.example.bigbrother.data.camera.CameraXController
 import com.example.bigbrother.presentation.camera.components.CameraPreview
+import com.example.bigbrother.presentation.camera.components.DetectionOverlay
 
+/**
+ * Экран сканирования ЛКП: камера + рамки дефектов + статус обработки.
+ */
 @Composable
 fun CameraScreen(
     viewModel: CameraViewModel,
@@ -80,6 +85,10 @@ fun CameraScreen(
                         controller = cameraController,
                         modifier = Modifier.fillMaxSize(),
                     )
+                    DetectionOverlay(
+                        result = uiState.lastResult,
+                        modifier = Modifier.fillMaxSize(),
+                    )
                 } else {
                     PermissionPlaceholder(
                         onRequest = { permissionLauncher.launch(Manifest.permission.CAMERA) },
@@ -115,19 +124,39 @@ private fun StatusPanel(state: CameraUiState) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(text = state.cameraStatus, style = MaterialTheme.typography.bodyMedium)
 
+        val bridgeText = when {
+            state.bridgeMessage != null -> "Обработка: ${state.bridgeMessage}"
+            state.nativeBridgeReady -> "Обработка: модель загружена, C++-мост активен"
+            else -> "Обработка: подготовка..."
+        }
         Text(
-            text = if (state.nativeBridgeReady) {
-                "C++-мост: подключён"
+            text = bridgeText,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (state.bridgeMessage != null) {
+                MaterialTheme.colorScheme.error
             } else {
-                "C++-мост: ожидает библиотеку (кадры пока не отправляются)"
+                MaterialTheme.colorScheme.onSurface
             },
+        )
+
+        Text(
+            text = "Кадров обработано: ${state.framesAnalyzed}" +
+                (state.lastInferenceMs?.let { " · последний: $it мс" } ?: ""),
             style = MaterialTheme.typography.bodySmall,
         )
 
         Text(
-            text = "Кадров отправлено в нативный слой: ${state.framesSubmitted}",
+            text = "Дефектов на последнем кадре: ${state.detectionCount}",
             style = MaterialTheme.typography.bodySmall,
         )
+
+        state.lastResult?.detections?.take(MAX_VISIBLE_DETECTIONS)?.forEach { detection ->
+            Text(
+                text = "• ${ModelLabels.forId(detection.classId)} — " +
+                    "${(detection.confidence * 100).toInt()}%",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
 
         state.message?.let { message ->
             Text(
@@ -138,3 +167,5 @@ private fun StatusPanel(state: CameraUiState) {
         }
     }
 }
+
+private const val MAX_VISIBLE_DETECTIONS = 3

@@ -1,10 +1,14 @@
 package com.example.bigbrother.data.camera
 
 import android.content.Context
+import android.os.SystemClock
+import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -19,10 +23,12 @@ class CameraXController(
     private val onFrame: (VideoFrame) -> Unit,
     private val onCameraReady: () -> Unit,
     private val onCameraError: (String) -> Unit,
+    private val frameIntervalMs: Long = DEFAULT_FRAME_INTERVAL_MS,
 ) {
 
     private val analysisExecutor: ExecutorService = Executors.newSingleThreadExecutor()
     private var cameraProvider: ProcessCameraProvider? = null
+    private var lastSubmittedAtMs = 0L
 
     fun bind(previewView: PreviewView) {
         val future = ProcessCameraProvider.getInstance(context)
@@ -37,6 +43,16 @@ class CameraXController(
                     }
 
                     val imageAnalysis = ImageAnalysis.Builder()
+                        .setResolutionSelector(
+                            ResolutionSelector.Builder()
+                                .setResolutionStrategy(
+                                    ResolutionStrategy(
+                                        ANALYSIS_RESOLUTION,
+                                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER,
+                                    ),
+                                )
+                                .build(),
+                        )
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
                         .also { it.setAnalyzer(analysisExecutor, ::analyze) }
@@ -65,7 +81,13 @@ class CameraXController(
 
     private fun analyze(image: ImageProxy) {
         try {
-            onFrame(image.toVideoFrame())
+            // Инференс на CPU занимает десятки миллисекунд: отправляем не каждый
+            // кадр, а с заданным интервалом. Остальные кадры просто закрываем.
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastSubmittedAtMs >= frameIntervalMs) {
+                lastSubmittedAtMs = now
+                onFrame(image.toVideoFrame())
+            }
         } catch (e: Exception) {
             onCameraError(e.message ?: "Ошибка обработки кадра")
         } finally {
@@ -87,4 +109,9 @@ class CameraXController(
         format = format,
         timestampNs = imageInfo.timestamp,
     )
+
+    private companion object {
+        const val DEFAULT_FRAME_INTERVAL_MS = 250L
+        val ANALYSIS_RESOLUTION = Size(1280, 720)
+    }
 }
