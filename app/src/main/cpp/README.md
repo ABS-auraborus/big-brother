@@ -56,8 +56,9 @@ private external fun nativeSubmitFrame(
 - Выход: `[1, 12, 8400] float32` = `4 box + 8 class scores` на 8400 anchor.
 - Классы: Orange Peel, Paint sagging, Peel Off, bleeding, bubbling, cissing,
   cratering, wrinkle (8 классов; метаданные модели).
-- Class-каналы — logits: C++ применяет sigmoid, затем порог confidence `0.50`,
-  NMS IoU `0.45`. В результат уходит уже вероятность `[0,1]`.
+- Class-каналы — уже вероятности `[0,1]` (не logits): C++ сравнивает их напрямую
+  с порогом confidence `0.50`, затем применяет NMS IoU `0.45`.
+  Применять sigmoid повторно **нельзя**: фоновые `0.0` станут `0.5` и пройдут порог.
 - Координаты детекций переводятся из letterbox 640x640 обратно в координаты
   **повёрнутого** RGB-кадра и clamp-ятся к границам изображения.
 

@@ -27,7 +27,7 @@ NativeFrameBridge.process()
   │                                                                  │
   │                              YUV/I420 → RGB → rotate → letterbox 640x640
   │                              NCHW float32 → ONNX Runtime Run
-  │                              output [1,12,8400] → sigmoid → threshold 0.50 → NMS 0.45
+  │                              output [1,12,8400] → prob > 0.50 → NMS 0.45
   │                              boxes → coordinates in rotated image space
   │                                                                  │
   ├─ nativeCopyLatestDetections() ◄──────────── flat float[] ────────┘

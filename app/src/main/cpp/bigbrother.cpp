@@ -421,15 +421,12 @@ Java_com_example_bigbrother_data_jni_NativeFrameBridge_nativeSubmitFrame(
         int bestClass = -1;
 
         for (int c = 4; c < numChannels; ++c) {
-            const float logit = rawOutput[static_cast<size_t>(c) * stride + idx];
-            if (!std::isfinite(logit)) {
-                continue;
-            }
-            // Модель отдаёт class logits: переводим в вероятность (sigmoid),
-            // чтобы порог 0.5 и число в UI имели смысл вероятности.
-            const float probability = 1.0f / (1.0f + std::exp(-logit));
-            if (probability > maxScore) {
-                maxScore = probability;
+            // Модель уже отдаёт вероятности классов (не logits):
+            // повторный sigmoid превратил бы фоновые 0.0 в 0.5 и дал бы
+            // тысячи ложных детекций на любом изображении.
+            const float score = rawOutput[static_cast<size_t>(c) * stride + idx];
+            if (std::isfinite(score) && score > maxScore) {
+                maxScore = score;
                 bestClass = c - 4;
             }
         }
